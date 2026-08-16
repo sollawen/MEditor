@@ -13,6 +13,7 @@ import (
 	"github.com/micro-editor/micro/v2/internal/md"
 	"github.com/micro-editor/micro/v2/internal/screen"
 	"github.com/micro-editor/micro/v2/internal/util"
+	"github.com/micro-editor/micro/v2/pkg/highlight"
 	"github.com/micro-editor/tcell/v2"
 )
 
@@ -121,7 +122,7 @@ func (w *BufWindow) renderSegmentMD(
 	lineStyles := map[int][]tcell.Style{}
 	for bufLine := seg.BufStartLine; bufLine <= seg.BufEndLine; bufLine++ {
 		line := w.Buf.Line(bufLine)
-		lineStyles[bufLine] = w.expandLineStyles(bufLine, utf8.RuneCountInString(line), config.DefStyle)
+		lineStyles[bufLine] = w.expandLineStyles(bufLine, utf8.RuneCountInString(line), config.DefStyle, seg.IsCodeBlock)
 	}
 
 	// ★ 预扫描：找到第一个内容行的 BufLine（绝对行号）
@@ -1089,9 +1090,15 @@ func (w *BufWindow) drawGutterAndLineNumMD(vY int, bufLine int, softwrapped bool
 // expandLineStyles 将稀疏 Match map 展开为稠密 style 数组。
 // result[i] = 第 i 个 rune 经过 highlighter + colorscheme 之后的完整 style。
 // 用于 renderSegmentMD：预计算稠密数组后，按 BufX 直接查颜色，解决标记隐藏后的锚点丢失问题。
-func (w *BufWindow) expandLineStyles(bufLine int, runeCount int, baseStyle tcell.Style) []tcell.Style {
+// isCodeBlock 为 true 时跳过污染检测：块内 Match 本就是嵌入语言组（constant.string 等），
+// polluted 会恒真，跳过才能让嵌入语言高亮正常工作。
+func (w *BufWindow) expandLineStyles(bufLine int, runeCount int, baseStyle tcell.Style, isCodeBlock bool) []tcell.Style {
 	charStyles := make([]tcell.Style, runeCount)
 	match := w.Buf.Match(bufLine)
+	// 非 codeblock 段的污染行（跨行 region state 粘滞）用 fresh 单行重高亮替换。
+	if !isCodeBlock && polluted(match) {
+		match = freshLineMatch(w.Buf.SyntaxDef, string(w.Buf.LineBytes(bufLine)))
+	}
 	curStyle := baseStyle
 	for i := 0; i < runeCount; i++ {
 		if group, ok := match[i]; ok {
@@ -1101,6 +1108,35 @@ func (w *BufWindow) expandLineStyles(bufLine int, runeCount int, baseStyle tcell
 	}
 
 	return charStyles
+}
+
+// polluted 判断该行 Match 是否被跨行 region 粘滞污染：
+// 存在任何「非空且不带 md- 前缀」的组即污染。
+// Group 名为空（默认组）是干净行常有的中性组，不算污染。
+func polluted(m highlight.LineMatch) bool {
+	for _, g := range m {
+		name := g.String()
+		if name != "" && !strings.HasPrefix(name, "md-") {
+			return true
+		}
+	}
+	return false
+}
+
+// freshLineMatch 对单行做无状态重高亮，绕开 buffer 里粘滞的跨行 region state。
+// 每次新建一次性 Highlighter：那是可变对象，HighlightString 会读写 lastRegion，
+// 复用共享 Highlighter 会引入显示线程与编辑线程的竞态；单行从 nil 态开始，结果确定。
+// 不挂 BufWindow，便于独立单测。
+func freshLineMatch(def *highlight.Def, line string) highlight.LineMatch {
+	if def == nil {
+		return nil
+	}
+	h := highlight.NewHighlighter(def)
+	matches := h.HighlightString(line)
+	if len(matches) == 0 {
+		return nil
+	}
+	return matches[0]
 }
 
 // ScreenRowToLine 将屏幕行偏移（相对 viewport 顶部）映射为 buffer 行号。

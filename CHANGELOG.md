@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.26] - 2026-08-16
+
+**Fixed a critical bug** where an unmatched punctuation mark inside a code block could break all Markdown rendering for the rest of the document. All users are encouraged to upgrade to this version.
+
+**修复了一个严重的Bug**：代码块里面的不成对的标点符号可能导致文档后面的所有markdown渲染失效。建议所有用户升级到此版本。
+
+**Fixed**
+
+- Markdown code blocks no longer swallow the rest of the document when a fenced block contains a lone `"` (e.g. a regex character class like `["'} ]`) that opens an unterminated multi-line string. Previously the block never closed, so every heading, list and fence after it turned white and lost its MD formatting; fenced blocks now close at the next fence line, and the paragraphs after them restore their structure and colors.
+- Horizontal rules made of `*` or `_` (e.g. `***`, `___`) are now recognized as HR lines; only `-` and `=` worked before.
+- Fenced code blocks opened with `~~~` (tilde fences) now render their bottom border correctly.
+
 ## [1.1.25] - 2026-08-07
 
 **Changed**

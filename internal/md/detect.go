@@ -1,17 +1,12 @@
 package md
 
-import (
-	"strings"
-
-	"github.com/micro-editor/micro/v2/pkg/highlight"
-)
+import "strings"
 
 // BufferReader 是 detect.go 对 buffer 的最小依赖接口。
 // 由 BufWindow 调用 DetectSegments 时传入 w.Buf（*buffer.Buffer 满足此接口）。
 type BufferReader interface {
 	LinesNum() int
 	LineBytes(n int) []byte
-	State(n int) highlight.State
 }
 
 // detectState 表示扫描器当前的状态。
@@ -36,71 +31,42 @@ func DetectSegments(
 	state := stateNormal
 	var startLine int // 当前多行结构起始行（blockquote/table/list 用）
 
-	// codeblock 边界跟踪：用 highlighter state 转折点
-	var codeblockStart int = -1
-	var lastState highlight.State
-	if visibleStart > 0 {
-		lastState = buf.State(visibleStart - 1)
-	}
+	// codeblock 边界跟踪：fence 行内容驱动，免疫嵌入语言 state 粘滞。
+	// 回溯初始化：块外为 -1，块内为开 fence 行号。
+	codeblockStart := findOpenFenceBefore(buf, visibleStart)
 
 	for y := visibleStart; y <= visibleEnd; y++ {
 		if y >= buf.LinesNum() {
 			break
 		}
 
-		curState := buf.State(y)
+		trimmed := strings.TrimSpace(string(buf.LineBytes(y)))
 
-		// ── Codeblock 边界：用 highlighter state 转折点 ──
-		if lastState == nil && curState != nil {
-			codeblockStart = y // 进入 codeblock
-
-			// ★ 新增：进入 codeblock 前，先关闭未闭合的多行结构（list/blockquote/table）。
-			// 否则它们的兜底分支（detect.go:167-184）会把 BufEndLine 扩到 visibleEnd，
-			// 吞掉 codeblock 并导致 segment 顺序倒挂（issue #6）。
-			switch state {
-			case stateBlockquote:
+		// ── Codeblock 边界：fence 行字符串匹配 ──
+		if isFenceLine(trimmed) {
+			if codeblockStart == -1 {
+				// 开 fence：先关闭未闭合的多行结构（list/blockquote/table）。
+				// 否则它们的兜底分支会把 BufEndLine 扩到 visibleEnd，
+				// 吞掉 codeblock 并导致 segment 顺序倒挂（issue #6）。
+				closeOpenStructures(&segments, &state, startLine, y)
+				codeblockStart = y
+			} else {
+				// 闭 fence：emit codeblock 段（含两侧行）
 				segments = append(segments, Segment{
-					BufStartLine: startLine,
-					BufEndLine:   y - 1,
-					Render:       RenderBlockquote,
+					BufStartLine: codeblockStart,
+					BufEndLine:   y,
+					Render:       RenderCodeBlock,
+					IsCodeBlock:  true,
 				})
-				state = stateNormal
-			case stateTable:
-				segments = append(segments, Segment{
-					BufStartLine: startLine,
-					BufEndLine:   y - 1,
-					Render:       RenderTable,
-				})
-				state = stateNormal
-			case stateList:
-				segments = append(segments, Segment{
-					BufStartLine: startLine,
-					BufEndLine:   y - 1,
-					Render:       RenderList,
-				})
-				state = stateNormal
+				codeblockStart = -1
 			}
+			continue // fence 行已归入 codeblock，不做字符串匹配
 		}
-		if lastState != nil && curState == nil {
-			segments = append(segments, Segment{
-				BufStartLine: codeblockStart,
-				BufEndLine:   y, // 退出行也包进 codeblock
-				Render:       RenderCodeBlock,
-			})
-			codeblockStart = -1
-			lastState = curState
-			continue // 退出行已归入 codeblock，不再做字符串匹配
-		}
-
-		// codeblock 内部行：不产生独立 segment，跳过
-		if curState != nil {
-			lastState = curState
-			continue
+		if codeblockStart != -1 {
+			continue // 块内行：归入 codeblock，不产生独立 segment
 		}
 
 		// ── 非 codeblock 行：字符串匹配 ──
-		line := string(buf.LineBytes(y))
-		trimmed := strings.TrimSpace(line)
 		reprocess := false
 
 		switch state {
@@ -178,7 +144,6 @@ func DetectSegments(
 			y-- // 回退：下一轮以 stateNormal 重新处理当前行
 			continue
 		}
-		lastState = curState
 	}
 
 	// 未闭合的 codeblock
@@ -187,6 +152,7 @@ func DetectSegments(
 			BufStartLine: codeblockStart,
 			BufEndLine:   visibleEnd,
 			Render:       RenderCodeBlock,
+			IsCodeBlock:  true,
 		})
 	}
 
@@ -270,13 +236,52 @@ func isTableRow(s string) bool {
 	return false
 }
 
-// isHR 判断是否为水平分割线：--- 或 === (至少 3 个)
+// isFenceLine 判断是否 fence 行：≥3 个反引号或波浪线开头。
+// 入参是已 TrimSpace 的行；只看前缀不区分开/闭，由主循环 codeblockStart 状态区分。
+func isFenceLine(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+}
+
+// findOpenFenceBefore 返回 visibleStart 所在未闭合 codeblock 的开 fence 行号，块外返回 -1。
+// 从第 0 行扫到 visibleStart-1，fence 行奇数次出现后在块内（记住行号），偶数次后回块外。
+// 生产热路径恒 visibleStart==0（buffer.go 全量调用），本函数零开销。
+func findOpenFenceBefore(buf BufferReader, visibleStart int) int {
+	open := -1
+	for y := 0; y < visibleStart && y < buf.LinesNum(); y++ {
+		if isFenceLine(strings.TrimSpace(string(buf.LineBytes(y)))) {
+			if open == -1 {
+				open = y
+			} else {
+				open = -1
+			}
+		}
+	}
+	return open
+}
+
+// closeOpenStructures 在进入 codeblock 前关闭未闭合的多行结构（list/blockquote/table）。
+// emit [startLine, y-1] 段并把 state 归 normal；startLine 由主循环后续匹配重新赋值。
+func closeOpenStructures(segments *[]Segment, st *detectState, startLine, y int) {
+	switch *st {
+	case stateBlockquote:
+		*segments = append(*segments, Segment{BufStartLine: startLine, BufEndLine: y - 1, Render: RenderBlockquote})
+		*st = stateNormal
+	case stateTable:
+		*segments = append(*segments, Segment{BufStartLine: startLine, BufEndLine: y - 1, Render: RenderTable})
+		*st = stateNormal
+	case stateList:
+		*segments = append(*segments, Segment{BufStartLine: startLine, BufEndLine: y - 1, Render: RenderList})
+		*st = stateNormal
+	}
+}
+
+// isHR 判断是否为水平分割线：- = * _ 任一字符重复 ≥3 次。
 func isHR(s string) bool {
 	if len(s) < 3 {
 		return false
 	}
 	c := s[0]
-	if c != '-' && c != '=' {
+	if c != '-' && c != '=' && c != '*' && c != '_' {
 		return false
 	}
 	for i := 1; i < len(s); i++ {

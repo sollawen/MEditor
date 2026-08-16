@@ -46,6 +46,8 @@ type Segment struct {
 	// 现阶段 renderer 只读 BufStartLine/BufEndLine，忽略 VisibleStart/VisibleEnd。
 	VisibleStart int
 	VisibleEnd   int
+	// IsCodeBlock 标记该段是否为 codeblock。render 层据此决定是否做污染检测。
+	IsCodeBlock bool
 	// Render 是渲染函数。接收完整 Segment，从 cfg.Buf 取 lines，返回渲染结果。
 	// Step 0 阶段只输出背景色。
 	Render func(seg Segment, width int, cfg MDConfig) *RenderedSegment

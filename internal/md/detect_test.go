@@ -3,8 +3,6 @@ package md
 import (
 	"fmt"
 	"testing"
-
-	"github.com/micro-editor/micro/v2/pkg/highlight"
 )
 
 // mockBuffer 实现 BufferReader 接口
@@ -19,7 +17,6 @@ func (m *mockBuffer) LineBytes(n int) []byte {
 	}
 	return nil
 }
-func (m *mockBuffer) State(n int) highlight.State { return nil }
 
 // segmentType 用于标识 segment 的渲染类型（测试用）
 type segmentType int
@@ -428,6 +425,134 @@ func TestDetectNormalOnly(t *testing.T) {
 		if segType := getSegmentType(segments[i]); segType != typeNormal {
 			t.Fatalf("segment %d: expected normal, got %v", i, segType)
 		}
+	}
+}
+
+// TestDetectCodeBlockWithLoneQuote 是 R0 计划 P0 核心回归：
+// fence 内落单引号不再吞段（对应对 T1 症状的 fixed3 实验）：
+//   - 块在下一条 fence 处正常闭合，不延伸到文件尾
+//   - 后续段落（heading / 第二个 fence）各自独立
+//   - codeblock 段 IsCodeBlock==true，heading 段为 false（锁 P0→P1 门控契约）
+func TestDetectCodeBlockWithLoneQuote(t *testing.T) {
+	buf := &mockBuffer{lines: []string{
+		"```ts",
+		`const txt = String(obj.chatTxt ?? '').replace(/["'}]./, ...)`, // 落单双引号
+		"```",
+		"### heading",
+		"```",
+		"another",
+		"```",
+	}}
+	segments := DetectSegments(buf, 0, 6)
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 segments, got %d", len(segments))
+	}
+	// 第一段：codeblock [0,2]
+	if segType := getSegmentType(segments[0]); segType != typeCodeBlock {
+		t.Fatalf("segment 0: expected codeblock, got %v", segType)
+	}
+	if segments[0].BufStartLine != 0 || segments[0].BufEndLine != 2 {
+		t.Fatalf("codeblock segment: expected [0,2], got [%d,%d]",
+			segments[0].BufStartLine, segments[0].BufEndLine)
+	}
+	if !segments[0].IsCodeBlock {
+		t.Error("codeblock segment: IsCodeBlock should be true")
+	}
+	// 第二段：heading [3,3]，不是 codeblock
+	if segType := getSegmentType(segments[1]); segType != typeHeading {
+		t.Fatalf("segment 1: expected heading, got %v", segType)
+	}
+	if segments[1].IsCodeBlock {
+		t.Error("heading segment: IsCodeBlock should be false")
+	}
+	// 第三段：codeblock [4,6]
+	if segType := getSegmentType(segments[2]); segType != typeCodeBlock {
+		t.Fatalf("segment 2: expected codeblock, got %v", segType)
+	}
+	if segments[2].BufStartLine != 4 || segments[2].BufEndLine != 6 {
+		t.Fatalf("second codeblock segment: expected [4,6], got [%d,%d]",
+			segments[2].BufStartLine, segments[2].BufEndLine)
+	}
+	if !segments[2].IsCodeBlock {
+		t.Error("second codeblock segment: IsCodeBlock should be true")
+	}
+}
+
+// TestDetectCodeBlockMidStart 验证 visibleStart 落在未闭合 codeblock 中间时，
+// findOpenFenceBefore 回溯初始化能正确把块起点定到开 fence 行。
+func TestDetectCodeBlockMidStart(t *testing.T) {
+	buf := &mockBuffer{lines: []string{
+		"```",
+		"code 1",
+		"code 2",
+		"code 3",
+		"```",
+		"after",
+	}}
+	segments := DetectSegments(buf, 2, 3)
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(segments))
+	}
+	if segType := getSegmentType(segments[0]); segType != typeCodeBlock {
+		t.Fatalf("expected codeblock, got %v", segType)
+	}
+	if segments[0].BufStartLine != 0 || segments[0].BufEndLine != 3 {
+		t.Fatalf("codeblock segment: expected [0,3], got [%d,%d]",
+			segments[0].BufStartLine, segments[0].BufEndLine)
+	}
+}
+
+// TestDetectListBeforeFence 显式锁定 issue #6 行为：未闭合 list 后紧跟 fence 时，
+// list 在 fence 前一行关闭，fence 独立成 codeblock，不产生 segment 乱序。
+func TestDetectListBeforeFence(t *testing.T) {
+	buf := &mockBuffer{lines: []string{
+		"- item 1",
+		"- item 2",
+		"```",
+		"code",
+		"```",
+	}}
+	segments := DetectSegments(buf, 0, 4)
+	if len(segments) != 2 {
+		t.Fatalf("expected 2 segments, got %d", len(segments))
+	}
+	if segType := getSegmentType(segments[0]); segType != typeList {
+		t.Fatalf("segment 0: expected list, got %v", segType)
+	}
+	if segments[0].BufStartLine != 0 || segments[0].BufEndLine != 1 {
+		t.Fatalf("list segment: expected [0,1], got [%d,%d]",
+			segments[0].BufStartLine, segments[0].BufEndLine)
+	}
+	if segType := getSegmentType(segments[1]); segType != typeCodeBlock {
+		t.Fatalf("segment 1: expected codeblock, got %v", segType)
+	}
+	if segments[1].BufStartLine != 2 || segments[1].BufEndLine != 4 {
+		t.Fatalf("codeblock segment: expected [2,4], got [%d,%d]",
+			segments[1].BufStartLine, segments[1].BufEndLine)
+	}
+}
+
+// TestDetectFenceIndented 验证带 1~3 空格缩进的 fence 行仍被检出（TrimSpace 从宽处理）。
+func TestDetectFenceIndented(t *testing.T) {
+	buf := &mockBuffer{lines: []string{
+		"  ```",
+		"  code",
+		"  ```",
+		"after",
+	}}
+	segments := DetectSegments(buf, 0, 3)
+	if len(segments) != 2 {
+		t.Fatalf("expected 2 segments, got %d", len(segments))
+	}
+	if segType := getSegmentType(segments[0]); segType != typeCodeBlock {
+		t.Fatalf("segment 0: expected codeblock, got %v", segType)
+	}
+	if segments[0].BufStartLine != 0 || segments[0].BufEndLine != 2 {
+		t.Fatalf("codeblock segment: expected [0,2], got [%d,%d]",
+			segments[0].BufStartLine, segments[0].BufEndLine)
+	}
+	if segType := getSegmentType(segments[1]); segType != typeNormal {
+		t.Fatalf("segment 1: expected normal, got %v", segType)
 	}
 }
 

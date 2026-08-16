@@ -22,9 +22,10 @@ func extractLang(fenceLine string) string {
 	return lang
 }
 
-// isClosingFence 判断行是否为闭合围栏行。
+// isClosingFence 判断行是否为闭合围栏行。与 detect 层 isFenceLine 同源：反引号或波浪线。
 func isClosingFence(line string) bool {
-	return strings.HasPrefix(strings.TrimSpace(line), "```")
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
 }
 
 // makeTopBorder 创建顶边框行（┌ + ─ + lang + ─ 填满 width）。

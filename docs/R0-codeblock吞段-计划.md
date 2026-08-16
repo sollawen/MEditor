@@ -96,6 +96,9 @@ func isFenceLine(trimmed string) bool {
 codeblockStart := findOpenFenceBefore(buf, visibleStart) // 回溯初始化，块外为 -1
 
 for y := visibleStart; y <= visibleEnd; y++ {
+	if y >= buf.LinesNum() { // 越界保护（同现状）
+		break
+	}
 	trimmed := strings.TrimSpace(string(buf.LineBytes(y)))
 
 	if isFenceLine(trimmed) {
@@ -124,7 +127,7 @@ for y := visibleStart; y <= visibleEnd; y++ {
 
 与现状的关键差异只有两处：codeblock 边界改由 fence 行内容翻转 `codeblockStart`；不再读写 `buf.State()`。字符串匹配部分（含 issue #6 之外的全部状态机逻辑）原样保留。
 
-`closeOpenStructures` 把现有「进入 codeblock 前关闭未闭合多行结构」的 switch 块（issue #6 修复，见 detect.go 进入 codeblock 分支）抽成函数，主循环与收尾兜底两处复用，行为不变：
+`closeOpenStructures` 把现有「进入 codeblock 前关闭未闭合多行结构」的 switch 块（issue #6 修复，见 detect.go 进入 codeblock 分支）抽成函数，仅供主循环开 fence 分支调用，行为不变。注意收尾兜底的 switch **不复用**它——兜底 emit 的是 `[startLine, visibleEnd]` 且循环已结束无需归位 state，语义不同，保持原状：
 
 ```go
 // closeOpenStructures 在进入 codeblock 前关闭未闭合的多行结构，
@@ -174,7 +177,7 @@ func findOpenFenceBefore(buf BufferReader, visibleStart int) int {
 #### 3.2.4 `State()` 从 BufferReader 接口退役
 
 - 删除 `BufferReader.State(n int) highlight.State`：md 包内只有 detect.go 用它（两处），P0 后无任何调用方；`*buffer.Buffer` 结构化满足收窄后的接口，无需改动。
-- detect.go 与 detect_test.go 的 `pkg/highlight` import 一并移除；mockBuffer 删掉 `State()` 方法。
+- detect.go 与 detect_test.go 的 `pkg/highlight` import 一并移除；mockBuffer 删掉 `State()` 方法。render_table_test.go 的 `mockBufferForTest.State()`（该文件唯一的 highlight 引用）同理可删——接口收窄后多余方法仍合法编译，不删亦无害；删掉则该文件可一并去掉 highlight import。
 - `detectState`（blockquote/table/list 状态机）与本次无关，保留。
 
 ### 3.3 P1：非 codeblock 段污染检测 + fresh 重高亮
@@ -281,7 +284,7 @@ func isHR(s string) bool {
 |---|---|
 | 改 highlight 引擎 | 多行字符串 region 是合法特性，纯 .ts 文件打开也依赖它 |
 | 批量改 80 个语言 yaml | 无法穷举落单引号场景；markdown.yaml 的 fence end 规则在字符串 region 内本来就不会被检查，改 yaml 治不了本 |
-| codeblock 内残留污染（P2） | 落单引号所在的那一个块内部仍会从该行染字符串色到块尾，与 micro 原生打开 .ts 行为一致，接受；彻底方案（每块独立子 highlighter）成本高 |
+| codeblock 内残留污染（P2） | 落单引号所在的那一个块内部仍会从该行染字符串色到块尾；fence 行/边框色同样受染（state 粘滞时 fence 行的 Match 也是 constant.string，isCodeBlock=true 跳过检测后不恢复）。与 micro 原生打开 .ts 行为一致，接受，验收时视为已知现象非新 bug；彻底方案（每块独立子 highlighter）成本高 |
 | `Group.String()` O(N) 反向索引优化 | 属普适性能改进，与本计划解耦；污染检测每行仅调几次 String()，量级可忽略，另行处理 |
 
 ## 5. 测试方案
@@ -292,7 +295,7 @@ mockBuffer 删除 `State()` 方法（接口已删），移除 highlight import�
 
 | 用例 | 内容 | 锁定 |
 |---|---|---|
-| TestDetectCodeBlockWithLoneQuote | `ts fence` 内放落单双引号行（`/["}']/g`）+ 闭 fence + 后续 `### heading` 与第二个 fence | **P0 核心回归**（对应 T1 症状与 fixed3 实验）：块在下一条 fence 闭合、后续段落独立、不吞到 EOF |
+| TestDetectCodeBlockWithLoneQuote | `ts fence` 内放落单双引号行（`/["}']/g`）+ 闭 fence + 后续 `### heading` 与第二个 fence | **P0 核心回归**（对应 T1 症状与 fixed3 实验）：块在下一条 fence 闭合、后续段落独立、不吞到 EOF；同时断言 codeblock 段 `IsCodeBlock==true`、heading 段为 false（锁 P0→P1 门控契约） |
 | TestDetectCodeBlockMidStart | `DetectSegments(buf, 2, 3)`，visibleStart 落在块中间 | 回溯初始化正确 |
 | TestDetectListBeforeFence | 未闭合 list 后紧跟 fence | list 在 y-1 关闭、无 segment 乱序（issue #6 行为显式锁定，此前无专门用例） |
 | TestDetectFenceIndented | 带 1~3 空格缩进的 fence 行 | TrimSpace 从宽处理 |

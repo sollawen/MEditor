@@ -1,10 +1,12 @@
 package display
 
 import (
+	"os"
 	"testing"
 
 	"github.com/micro-editor/micro/v2/internal/buffer"
 	"github.com/micro-editor/micro/v2/internal/config"
+	"github.com/micro-editor/micro/v2/pkg/highlight"
 	"github.com/micro-editor/tcell/v2"
 )
 
@@ -396,3 +398,103 @@ func TestUpdatePrevCursor(t *testing.T) {
 
 // 避免 unused import 警告（config 用于编译期检查）
 var _ = config.DefStyle
+
+// testGroup 通过解析一个最小 yaml 注册所需高亮组，返回 Group 值。
+// 必须走 ParseDef：直接写 highlight.Groups 会绕过内部 numGroups 计数器，
+// 导致后续解析真实 yaml 时组号重复分配、String() 映射错乱（map 迭代随机）。
+func testGroup(t *testing.T, names ...string) map[string]highlight.Group {
+	src := "filetype: test\nrules:\n"
+	for _, n := range names {
+		src += "    - " + n + ": \"a\"\n"
+	}
+	f, err := highlight.ParseFile([]byte(src))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if _, err := highlight.ParseDef(f, nil); err != nil {
+		t.Fatalf("ParseDef: %v", err)
+	}
+	out := make(map[string]highlight.Group)
+	for _, n := range names {
+		out[n] = highlight.Groups[n]
+	}
+	return out
+}
+
+// TestPolluted 验证污染判定：md-* 组干净、非 md-* 组污染、空组名中性。
+func TestPolluted(t *testing.T) {
+	groups := testGroup(t, "md-header", "constant.string")
+	mdHeader := groups["md-header"]
+	strGroup := groups["constant.string"]
+
+	if polluted(highlight.LineMatch{0: mdHeader}) {
+		t.Error("md-header 组不应判定为污染")
+	}
+	if !polluted(highlight.LineMatch{0: strGroup}) {
+		t.Error("constant.string 组应判定为污染")
+	}
+	// 空组名（默认组）是中性组，不算污染
+	if polluted(highlight.LineMatch{0: 0}) {
+		t.Error("空组名（Group 0）不应判定为污染")
+	}
+	// 混合：md-* + 污染组
+	if !polluted(highlight.LineMatch{0: mdHeader, 5: strGroup}) {
+		t.Error("混合 md-* + 污染组应判定为污染")
+	}
+	// 空 map
+	if polluted(highlight.LineMatch{}) {
+		t.Error("空 map 不应判定为污染")
+	}
+}
+
+// loadMarkdownDef 从真实 runtime/syntax/markdown.yaml 解析出 Def（不解析 include）。
+// 顶层 md-* 规则是单行 regex，不依赖 include，fresh 单行高亮足够。
+func loadMarkdownDef(t *testing.T) *highlight.Def {
+	data, err := os.ReadFile("../../runtime/syntax/markdown.yaml")
+	if err != nil {
+		t.Skipf("markdown.yaml 不可读，跳过: %v", err)
+	}
+	f, err := highlight.ParseFile(data)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	def, err := highlight.ParseDef(f, nil)
+	if err != nil {
+		t.Fatalf("ParseDef: %v", err)
+	}
+	return def
+}
+
+// TestFreshLineMatch 用真实 markdown.yaml 对单行做 fresh 重高亮，
+// 断言命中 md-header / md-list 组（freshLineMatch 不挂 BufWindow，可独立单测）。
+func TestFreshLineMatch(t *testing.T) {
+	def := loadMarkdownDef(t)
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"heading", "### heading", "md-header"},
+		{"list item", "- item", "md-list"},
+		{"numbered list", "1. item", "md-list"},
+		{"plain text", "just some text", ""},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := freshLineMatch(def, tt.line)
+			if tt.want == "" {
+				if polluted(m) {
+					t.Errorf("freshLineMatch(%q) = %v, want 无污染", tt.line, m)
+				}
+				return
+			}
+			for _, g := range m {
+				if g.String() == tt.want {
+					return
+				}
+			}
+			t.Errorf("freshLineMatch(%q) = %v, want 命中组 %s", tt.line, m, tt.want)
+		})
+	}
+}
