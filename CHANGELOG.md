@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.27] - 2026-08-17
+
+**Fixed a bug** in micro's core syntax-highlighting engine where color state polluted and leaked across code-block boundaries.
+
+修复了micro核心的语法高亮引擎，颜色状态在代码块内外的污染和扩散的Bug。
 
 **Fixed**
 
