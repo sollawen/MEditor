@@ -2,6 +2,8 @@
 
 ## 1. 问题与目标
 
+T1文档：~/pi-dev/gameBuddy/gamePack/texas/docs/T1-tts播放完成后再上行方案.md
+
 **症状（v1.1.26 / R0 落地后的残留）**：T1 文档 159 行 `const txt = ...replace(/["}']/g, ...)` 起，其后**所有** codeblock 内部文字全部近白、无语法高亮；159 行之前的块正常；块外正文正常（P1 救回）。
 
 **对照基线**：VSCode 打开同一文档完全正确——包括 159 行所在的块内部、以及其后所有块。
@@ -66,7 +68,9 @@ VSCode 的 markdown 之所以不扩散，是因为**每个 fence 是独立 scope
 
 ### 3.1 A：引擎 — pattern extent 遮蔽 region start
 
-**语义定义**：设某行内嵌套 region start 匹配于位置 X。若存在一条「适用的 pattern」匹配 [s, e] 满足 `s < X < e`（X 严格在 extent 内部），则该 region start **不成立**：视同本行无嵌套 start，落入既有的 pattern 全行涂色路径，state 不进入该 region。
+**语义定义**：设某行内嵌套 region start 匹配于区间 [X, Y)（X 为匹配起点，Y 为匹配终点）。若存在一条「适用的 pattern」匹配 [s, e] 满足 `s < X && Y <= e`（pattern 的匹配 extent **完全覆盖**整个 region start 匹配序列），则该 region start **不成立**：视同本行无嵌套 start，落入既有的 pattern 全行涂色路径，state 不进入该 region。
+
+**实施修正（比计划初稿更严）**：初稿判据为 `s < X < e`（起点严格在 extent 内部），回归 harness 全量 yaml 时暴露假遮蔽——yaml 的 string region start 正则是 `(^| )"`（含引号前空格），`:[[:space:]]` 语句 pattern 恰好吃掉 `: `（含空格/起点）但没吃到引号，`s < X < e` 误判为遮蔽，导致 `key: "value"` 全部失色（3806 行）。改为要求 extent 完整覆盖整个 region start 匹配序列（含定界符终点 Y）：定界符（匹配尾字符 Y-1）未被 pattern 消费时 region 照常开。T1 用例仍触发（正则 extent [48,56] 完整覆盖 `"`[50,51]）；单字符定界符（`"`/`'` 等，X+1==Y）两种判据数学等价，故常见场景行为不变。
 
 设计要点：
 
@@ -75,13 +79,13 @@ VSCode 的 markdown 之所以不扩散，是因为**每个 fence 是独立 scope
 3. **statesOnly 两种模式行为必须一致**：遮蔽检查不放进任何 `if !statesOnly` 块——region 开启决策同时影响 `h.lastRegion`（state）与 highlights（match），`HighlightStates` 与 `HighlightMatches` 必须看到相同决策，否则 state 与颜色错位。
 4. **适用的 pattern 集合**：与既有 pattern 涂色路径用同一套门控——`highlightRegion` 内是 limitGroup 门控（`curRegion.group == curRegion.limitGroup || p.group == curRegion.limitGroup`），`highlightEmptyRegion` 内是全部 `h.Def.rules.patterns`。不新设门控规则。
 
-**改动点（两个函数各插一段，共约 ±25 行）**：
+**改动点（两个函数各插一段，共约 +33 行）**：
 
 `highlightRegion`，L145 的 `if firstRegion != nil && firstLoc[0] != lineLen` 之前：
 
 ```go
-// pattern 匹配 extent 内部的 region start 不成立：更早开始的 pattern 吃掉了它
-if firstRegion != nil && shielded(curRegion.rules, line, firstLoc[0], curRegion) {
+// pattern 完全覆盖 region start 匹配序列时不成立：更早开始的 pattern 吃掉了整个定界符
+if firstRegion != nil && shielded(curRegion.rules, line, firstLoc[0], firstLoc[1], curRegion) {
     firstRegion = nil
 }
 ```
@@ -91,10 +95,14 @@ if firstRegion != nil && shielded(curRegion.rules, line, firstLoc[0], curRegion)
 新增 helper（放 highlighter.go）：
 
 ```go
-// shielded 判断 pos 是否落在某条适用 pattern 的匹配 extent 内部：
-// region start 出现在 pattern 匹配范围内时不成立（最左优先，pattern 消费其 extent）。
-// 同位置（s == pos）不遮蔽，保持既有行为。
-func shielded(rs *rules, line []byte, pos int, cur *region) bool {
+// shielded 判断 [start,end) 的 region start 匹配序列是否被某条适用 pattern 的
+// 匹配 extent 完全消费：pattern 起点严格靠前且终点覆盖整个 start 序列时，
+// 该 region start 不成立（如正则字面量字符类里的引号不是字符串定界符）。
+// 要求完全覆盖而非起点命中：region start 正则可能含前缀字符（如 `(^| )"` 的空格），
+// 仅前缀落在 pattern extent 内时（如 `key: "value"` 的 `: ` 被语句 pattern 吃掉）
+// 引号本身仍可用，不能遮蔽。同位置（s == start）不遮蔽，保持既有行为。
+// cur 非 nil 时按 region 内 pattern 涂色同款门控（limitGroup）；cur == nil 表示顶层无门控。
+func shielded(rs *rules, line []byte, start, end int, cur *region) bool {
     for _, p := range rs.patterns {
         if cur != nil {
             if cur.group != cur.limitGroup && p.group != cur.limitGroup {
@@ -102,7 +110,7 @@ func shielded(rs *rules, line []byte, pos int, cur *region) bool {
             }
         }
         for _, m := range findAllIndex(p.regex, line) {
-            if m[0] < pos && pos < m[1] {
+            if m[0] < start && end <= m[1] {
                 return true
             }
         }
@@ -111,7 +119,7 @@ func shielded(rs *rules, line []byte, pos int, cur *region) bool {
 }
 ```
 
-（顶层调用传 `cur == nil` 表示无门控；具体签名实现时可微调，语义不变。）
+（顶层调用传 `cur == nil` 表示无门控；调用处分别传 region-start 匹配的起点与终点 `firstLoc[0], firstLoc[1]`。）
 
 **遮蔽后的自然路径（不写新代码，走既有分支）**：`firstRegion = nil` → 落到既有的 `fullHighlights` pattern 全行涂色（其 `endLoc` 门控照旧）→ 行尾 `loc == nil` → `h.lastRegion = curRegion`（保持 fence region 内）→ 下一行继续在 fence 内正常高亮。以 T1:159 为例：整行按 ts pattern 涂色（正则规则命中 [48,56]），state 留在 fence region，**后续块内每行 Match 恢复正常语法组**——这正是 VSCode 的行为。
 
@@ -181,6 +189,7 @@ if seg.IsCodeBlock {
 | 块级 fresh 结果写回 buffer（SetMatch） | 覆盖 state 派生的真实 Match、污染 buffer 全局状态；显示层自用即可 |
 | R2 的清理 | 单独计划（`docs/R2-退役P1污染检测-计划.md`），门禁：本计划验收通过 |
 | revert v1.1.26 | P0/P3 本来就对；P1 前向删除（R2），不回头 revert |
+| sh.yaml include 解析不上（备忘，另行立项） | 既有 bug：`sh.yaml` 的 `filetype: shell`，而 markdown.yaml 的 bash region `include: "sh"` 按 `header.FileType` 匹配永远解析不上，` ```sh ` 块无嵌入高亮。upstream 同款，与 R1 无关；本行只做备忘，另行立项解决 |
 
 ## 5. 测试方案
 
@@ -223,10 +232,29 @@ if seg.IsCodeBlock {
 |---|---|
 | 引擎改动影响全部 158 个 yaml | 回归 harness（5.3）逐行 diff + 白名单放行；改动本身只在「行内有 region start 且被 pattern extent 覆盖」时改变行为 |
 | 同位置遮蔽语义与 TextMate 不完全一致 | 保守选择 region 赢；已知案例（T1 类）均为 pattern 更靠前，不依赖同位置裁决 |
-| 遮蔽检查性能 | 仅在行内存在 region start 时触发，`findAllIndex` 与既有 pattern 涂色路径同源同级；limitGroup 门控下区域外 pattern 零成本跳过 |
+| 遮蔽检查性能 | 实测有代价（计划初稿写的「与既有 pattern 涂色路径同源同级」不成立），详见 §6.1；决策：按计划版（FindAllIndex）落地，接受有界成本（成本集中在文件打开/大 undo/colorscheme reload 等低频路径，打字不可感知） |
 | statesOnly 与非 statesOnly 决策漂移 | 设计铁律（3.1 要点 3）+ TestShieldStatesMatchesConsistent 锁定 |
 | 块级 fresh 每帧成本 | 与 R0 §3.3.5 满屏 fresh 估算同级；先不缓存，实测有感知再加（注释留 hook） |
 | 与 upstream micro 分歧 | 改动是 upstream #2840 的自然续章、修的是所有 micro 用户都有的 bug；保持外科手术式小改 + 充分测试，具备后续提 PR 回 upstream 的条件 |
+
+### 6.1 性能实测数据（2025 实验沙箱实测，决定按计划版落地）
+
+实测方法：`/tmp/mdhl` 沙箱，同一份 `pkg/highlight` 复制两份（原版 + 计划版），加载真实 158 个 yaml，同一输入跑 `HighlightStates`+`HighlightMatches`，50 轮取均值。
+
+| 场景 | 原版 | 计划版(FindAllIndex) | 窗口化版 |
+|---|---|---|---|
+| 561 行 TS（controller.ts）全量 | 7.66 ms | 14.20 ms（+85%） | 13.40 ms（+75%） |
+| 1796 行 TS（5 文件合并）全量 | 14.03 ms | 50.30 ms（+258%） | 46.96 ms（+235%） |
+| 252 行 MD（T1 全文）全量 | 1.54 ms | 5.66 ms（+266%） | 4.99 ms（+223%） |
+| 打字单行（ReHighlightLine） | 12.8 µs | 26.9 µs（+111%，绝对 +14 µs/键） | — |
+
+**根因**：shield 只在「行内发现 region start」时触发，但该场景在 TS 里占 ~53% 行、MD 里 ~66% 行；每行对当前 region 的适用 pattern 集做一次全量 `findAllIndex`（计划版）。成本 ≈ 有 region start 的行数 × 行长 × pattern 数，随文件线性增长。真命中率极低：controller.ts 0 次、5 文件合并 2 次、T1 全文 2 次——大部分行是白扫。
+
+**决策**：成本集中在文件打开 / 大 undo / colorscheme reload 等**低频一次性**路径；打字路径 +14 µs/键不可感知；典型 `<500` 行文件增量 `<10 ms`，1800 行 TS 打开约 +36 ms（可接受）。**首批按计划版（FindAllIndex）落地，不做额外优化。**
+
+**高亮机制总结**：打开时算全量、编辑时算增量、导航时零计算——`HighlightStates`/`HighlightMatches` 只在文件打开（buffer.go:1056）和内容修改（`MarkModified`，即 Insert/Remove/undo）两条路径上运行；滚动/翻页/光标移动/jump 只动视口、重绘时直接读预计算的 `Buf.Match` 数组，不进高亮函数。因此 shield 的成本只落在前两条路径（低频或有界），导航类高频操作零影响、零感知。
+
+**优化 lever 备忘**：跨 pass 缓存 / 窗口化扫描等性能优化 lever 的详细分析（收益、风险、决策）移入 `docs/R1a-性能优化lever-备忘.md`；等 R1 执行完之后再讨论是否有必要做。
 
 ## 7. 实施步骤
 

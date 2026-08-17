@@ -2,6 +2,9 @@ package display
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/micro-editor/micro/v2/internal/buffer"
@@ -496,5 +499,128 @@ func TestFreshLineMatch(t *testing.T) {
 			}
 			t.Errorf("freshLineMatch(%q) = %v, want 命中组 %s", tt.line, m, tt.want)
 		})
+	}
+}
+
+// loadAllSyntaxDefs 加载 runtime/syntax 全部 yaml 并 ResolveIncludes（fence 嵌入语言需要）。
+// 与 loadMarkdownDef 的区别：后者不解析 include，仅供顶层 md-* 单行规则测试。
+// 全包只加载一次：highlight.Groups 是进程级全局表，共享实例才能跨用例比较组名。
+var (
+	allDefsOnce sync.Once
+	allDefs     map[string]*highlight.Def
+	allDefsErr  error
+)
+
+func loadAllSyntaxDefs(t *testing.T) map[string]*highlight.Def {
+	t.Helper()
+	allDefsOnce.Do(func() {
+		dir := "../../runtime/syntax"
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			allDefsErr = err
+			return
+		}
+		allDefs = map[string]*highlight.Def{}
+		var files []*highlight.File
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			pf, err := highlight.ParseFile(data)
+			if err != nil {
+				continue
+			}
+			hdr, err := highlight.MakeHeaderYaml(data)
+			if err != nil {
+				continue
+			}
+			d, err := highlight.ParseDef(pf, hdr)
+			if err != nil {
+				continue
+			}
+			allDefs[pf.FileType] = d
+			files = append(files, pf)
+		}
+		for _, d := range allDefs {
+			highlight.ResolveIncludes(d, files)
+		}
+	})
+	if allDefsErr != nil {
+		t.Skipf("runtime/syntax 不可读，跳过: %v", allDefsErr)
+	}
+	return allDefs
+}
+
+// matchHasGroup 判断 LineMatch 中是否存在名为 name 的组。
+func matchHasGroup(m highlight.LineMatch, name string) bool {
+	for _, g := range m {
+		if g.String() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// t1BlockLine 即 T1 文档 159 行原文：正则字符类 /["]}']/g 内含落单引号。
+const t1BlockLine = `    const txt = String(obj.chatTxt ?? '').replace(/["}']/g, '').trim().slice(0, 20);`
+
+// TestFreshBlockMatches ts fence 块含 T1:159 行：块内行恢复正常 ts 语法组
+// （正则 constant 出现），不再整行 constant.string。
+func TestFreshBlockMatches(t *testing.T) {
+	def := loadAllSyntaxDefs(t)["markdown"]
+	if def == nil {
+		t.Fatal("markdown def 未加载")
+	}
+	block := []string{"```ts", t1BlockLine, "```"}
+	matches := freshBlockMatches(def, block)
+	if len(matches) != 3 {
+		t.Fatalf("freshBlockMatches 返回 %d 行, want 3", len(matches))
+	}
+	m := matches[1]
+	if !matchHasGroup(m, "constant") {
+		t.Errorf("块内行应含正则 constant 组, got %v", m)
+	}
+	// 列 38-39 的 '' 是合法配对字符串；污染特征是列 50+ 落单 " 染 string 到行尾
+	for i, g := range m {
+		if g.String() == "constant.string" && i >= 50 {
+			t.Errorf("列 %d 出现 constant.string，块内行被 string region 污染: %v", i, m)
+		}
+	}
+}
+
+// TestFreshBlockIsolation 真·未闭合字符串（引擎修复不覆盖的残留类）：
+// 污染最多染到所在块尾；第二个块从 nil state 重新起步，完全干净。
+// 两个块各自独立调 freshBlockMatches，对齐 renderSegmentMD 按 segment 分块调用的真实形态。
+func TestFreshBlockIsolation(t *testing.T) {
+	def := loadAllSyntaxDefs(t)["markdown"]
+	if def == nil {
+		t.Fatal("markdown def 未加载")
+	}
+	block1 := []string{"```ts", `const s = "abc`, "foo();", "```"}
+	block2 := []string{"```ts", "const ok = 1", "```"}
+
+	m1 := freshBlockMatches(def, block1)
+	if len(m1) != 4 {
+		t.Fatalf("block1 返回 %d 行, want 4", len(m1))
+	}
+	// 第一块尾部行染 string 到块尾即止（合理残留，同 VSCode 行为边界）
+	if !matchHasGroup(m1[2], "constant.string") {
+		t.Errorf("未闭合字符串应把所在块尾部染 string, got %v", m1[2])
+	}
+
+	m2 := freshBlockMatches(def, block2)
+	if len(m2) != 3 {
+		t.Fatalf("block2 返回 %d 行, want 3", len(m2))
+	}
+	// 隔离性核心断言：第二块内容行完全干净，无跨块污染
+	if matchHasGroup(m2[1], "constant.string") {
+		t.Errorf("第二块被第一块的残留污染: %v", m2[1])
+	}
+	if !matchHasGroup(m2[1], "identifier") && !matchHasGroup(m2[1], "constant.number") {
+		t.Errorf("第二块内容行应有正常语法组, got %v", m2[1])
 	}
 }

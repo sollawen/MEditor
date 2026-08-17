@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Fixed**
+
+- A quote inside a regex literal or character class (e.g. `/["'}']/g`) is no longer mistaken for a string delimiter: it previously turned every later line string-colored in any syntax-highlighted file, and inside a Markdown code block the block never closed so all following headings, lists and fences lost their formatting. Such quotes now highlight as regular expression syntax.
+- An unterminated string inside a code block is now confined to its own block: the block colors up to the closing fence as before, and every following block renders with clean colors instead of inheriting the broken state.
+
 ## [1.1.26] - 2026-08-16
 
 **Fixed a critical bug** where an unmatched punctuation mark inside a code block could break all Markdown rendering for the rest of the document. All users are encouraged to upgrade to this version.

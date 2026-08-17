@@ -142,6 +142,11 @@ func (h *Highlighter) highlightRegion(highlights LineMatch, start int, canMatchE
 			}
 		}
 	}
+	if firstRegion != nil && shielded(curRegion.rules, line, firstLoc[0], firstLoc[1], curRegion) {
+		// region start 落在更早开始的 pattern 匹配 extent 内部时不成立，
+		// 视同无嵌套 start，走下方 pattern 全行涂色路径
+		firstRegion = nil
+	}
 	if firstRegion != nil && firstLoc[0] != lineLen {
 		if !statesOnly {
 			highlights[start+firstLoc[0]] = firstRegion.limitGroup
@@ -224,6 +229,11 @@ func (h *Highlighter) highlightEmptyRegion(highlights LineMatch, start int, canM
 			}
 		}
 	}
+	if firstRegion != nil && shielded(h.Def.rules, line, firstLoc[0], firstLoc[1], nil) {
+		// 同 highlightRegion：region start 落在 pattern 匹配 extent 内部时不成立；
+		// 顶层无门控，任何 pattern 都可参与遮蔽
+		firstRegion = nil
+	}
 	if firstRegion != nil && firstLoc[0] != lineLen {
 		if !statesOnly {
 			highlights[start+firstLoc[0]] = firstRegion.limitGroup
@@ -263,6 +273,29 @@ func (h *Highlighter) highlightEmptyRegion(highlights LineMatch, start int, canM
 	}
 
 	return highlights
+}
+
+// shielded 判断 [start,end) 的 region start 匹配序列是否被某条适用 pattern 的
+// 匹配 extent 完全消费：pattern 起点严格靠前且终点覆盖整个 start 序列时，
+// 该 region start 不成立（如正则字面量字符类里的引号不是字符串定界符）。
+// 要求完全覆盖而不是起点命中：region start 正则可能含前缀字符（如 `(^| )"` 的空格），
+// 仅前缀落在 pattern extent 内时（如 `key: "value"` 的 `: ` 被语句 pattern 吃掉）
+// 引号本身仍可用，不能遮蔽。同位置（s == start）不遮蔽，保持既有行为。
+// cur 非 nil 时按 region 内 pattern 涂色同款门控（limitGroup）；cur == nil 表示顶层无门控。
+func shielded(rs *rules, line []byte, start, end int, cur *region) bool {
+	for _, p := range rs.patterns {
+		if cur != nil {
+			if cur.group != cur.limitGroup && p.group != cur.limitGroup {
+				continue
+			}
+		}
+		for _, m := range findAllIndex(p.regex, line) {
+			if m[0] < start && end <= m[1] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // HighlightString syntax highlights a string

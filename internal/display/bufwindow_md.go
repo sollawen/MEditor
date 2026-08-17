@@ -119,10 +119,25 @@ func (w *BufWindow) renderSegmentMD(
 	}
 
 	// ★ lineStyles 预计算：覆盖完整范围 BufStartLine~BufEndLine
+	// codeblock 段走块级 fresh：颜色不取 buffer Match（受全局 state 污染，
+	// 块内残留污染会跨 fence 扩散），改为从 nil state 对整块独立高亮；
+	// 非 codeblock 段维持 buffer Match + P1 污染检测路径。
 	lineStyles := map[int][]tcell.Style{}
+	var blockMatches []highlight.LineMatch
+	if seg.IsCodeBlock {
+		blockLines := make([]string, 0, seg.BufEndLine-seg.BufStartLine+1)
+		for bufLine := seg.BufStartLine; bufLine <= seg.BufEndLine; bufLine++ {
+			blockLines = append(blockLines, w.Buf.Line(bufLine))
+		}
+		blockMatches = freshBlockMatches(w.Buf.SyntaxDef, blockLines)
+	}
 	for bufLine := seg.BufStartLine; bufLine <= seg.BufEndLine; bufLine++ {
 		line := w.Buf.Line(bufLine)
-		lineStyles[bufLine] = w.expandLineStyles(bufLine, utf8.RuneCountInString(line), config.DefStyle, seg.IsCodeBlock)
+		if rel := bufLine - seg.BufStartLine; seg.IsCodeBlock && blockMatches != nil && rel < len(blockMatches) {
+			lineStyles[bufLine] = expandMatch(blockMatches[rel], utf8.RuneCountInString(line), config.DefStyle)
+		} else {
+			lineStyles[bufLine] = w.expandLineStyles(bufLine, utf8.RuneCountInString(line), config.DefStyle, seg.IsCodeBlock)
+		}
 	}
 
 	// ★ 预扫描：找到第一个内容行的 BufLine（绝对行号）
@@ -1087,18 +1102,24 @@ func (w *BufWindow) drawGutterAndLineNumMD(vY int, bufLine int, softwrapped bool
 	}
 }
 
-// expandLineStyles 将稀疏 Match map 展开为稠密 style 数组。
+// expandLineStyles 将稀疏 Match map 展开为稠密 style 数组（按 buffer 行）。
 // result[i] = 第 i 个 rune 经过 highlighter + colorscheme 之后的完整 style。
 // 用于 renderSegmentMD：预计算稠密数组后，按 BufX 直接查颜色，解决标记隐藏后的锚点丢失问题。
 // isCodeBlock 为 true 时跳过污染检测：块内 Match 本就是嵌入语言组（constant.string 等），
-// polluted 会恒真，跳过才能让嵌入语言高亮正常工作。
+// polluted 会恒真，跳过才能让嵌入语言高亮正常工作（codeblock 颜色另走块级 fresh 路径）。
 func (w *BufWindow) expandLineStyles(bufLine int, runeCount int, baseStyle tcell.Style, isCodeBlock bool) []tcell.Style {
-	charStyles := make([]tcell.Style, runeCount)
 	match := w.Buf.Match(bufLine)
 	// 非 codeblock 段的污染行（跨行 region state 粘滞）用 fresh 单行重高亮替换。
 	if !isCodeBlock && polluted(match) {
 		match = freshLineMatch(w.Buf.SyntaxDef, string(w.Buf.LineBytes(bufLine)))
 	}
+	return expandMatch(match, runeCount, baseStyle)
+}
+
+// expandMatch 把稀疏 Match 展开为稠密 style 数组（纯函数，无 buffer 依赖）：
+// result[i] = 第 i 个 rune 所在组经 colorscheme 之后的完整 style，组边界外沿用前一个组。
+func expandMatch(match highlight.LineMatch, runeCount int, baseStyle tcell.Style) []tcell.Style {
+	charStyles := make([]tcell.Style, runeCount)
 	curStyle := baseStyle
 	for i := 0; i < runeCount; i++ {
 		if group, ok := match[i]; ok {
@@ -1106,7 +1127,6 @@ func (w *BufWindow) expandLineStyles(bufLine int, runeCount int, baseStyle tcell
 		}
 		charStyles[i] = curStyle
 	}
-
 	return charStyles
 }
 
@@ -1137,6 +1157,20 @@ func freshLineMatch(def *highlight.Def, line string) highlight.LineMatch {
 		return nil
 	}
 	return matches[0]
+}
+
+// freshBlockMatches 对 codeblock 段做整块独立高亮（一次性 Highlighter，nil state 起步）。
+// fence 是 markdown 硬边界：从开 fence 行开始 fresh 会自然进入嵌入语言 region，
+// 块内任何残留污染（如真未闭合字符串）最多染到块尾，不跨 fence 扩散。
+// 与 freshLineMatch 同款一次性 Highlighter 纪律：不碰 buffer 共享实例，无竞态。
+// 性能：每帧每可见 codeblock 一次，O(块行数×pattern 数)；若实测滚动有感知，
+// 可按（块行范围+首行内容）加 per-frame 缓存。
+func freshBlockMatches(def *highlight.Def, lines []string) []highlight.LineMatch {
+	if def == nil {
+		return nil
+	}
+	h := highlight.NewHighlighter(def)
+	return h.HighlightString(strings.Join(lines, "\n"))
 }
 
 // ScreenRowToLine 将屏幕行偏移（相对 viewport 顶部）映射为 buffer 行号。
