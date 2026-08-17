@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Fixed**
+
+- Finder no longer marks ignored files inside an untracked directory as `U` (untracked); files matched by `.gitignore` (e.g. `__pycache__/`, `test_*.py`) now correctly show `I` in the git status column.
+
 ## [1.1.27] - 2026-08-17
 
 **Fixed a bug** in micro's core syntax-highlighting engine where color state polluted and leaked across code-block boundaries.

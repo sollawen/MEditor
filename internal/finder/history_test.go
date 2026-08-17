@@ -438,7 +438,7 @@ func TestHistoryList_Activate_NonexistentRemoved(t *testing.T) {
 func TestHistoryList_Activate_DirWithTrailingSeparator(t *testing.T) {
 	sep := string(filepath.Separator)
 	target := t.TempDir()
-	fm := openTestSession(t, 60, 15, []string{target + sep})
+	fm := openTestSession(t, 60, 20, []string{target + sep})
 	if fm.history == nil {
 		t.Fatal("history not built")
 	}

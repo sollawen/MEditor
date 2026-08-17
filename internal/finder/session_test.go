@@ -244,24 +244,24 @@ func openTestSession(t *testing.T, w, h int, dirs []string) *Session {
 
 // ---- 高度门槛 ----
 
-func TestSession_Height14_NoHistoryEvenWithDirs(t *testing.T) {
-	fm := openTestSession(t, 60, 14, []string{"/a", "/b", "/c"})
+func TestSession_Height19_NoHistoryEvenWithDirs(t *testing.T) {
+	fm := openTestSession(t, 60, 19, []string{"/a", "/b", "/c"})
 	if fm.history != nil {
-		t.Errorf("H=14: history should not be constructed; got %+v", fm.history)
+		t.Errorf("H=19: history should not be constructed; got %+v", fm.history)
 	}
 	if len(fm.regions) != 2 {
-		t.Errorf("H=14: regions len=%d, want 2 (fileList+preview)", len(fm.regions))
+		t.Errorf("H=19: regions len=%d, want 2 (fileList+preview)", len(fm.regions))
 	}
 	if len(fm.keyboardRegions) != 1 {
-		t.Errorf("H=14: keyboardRegions len=%d, want 1 (only fileList)", len(fm.keyboardRegions))
+		t.Errorf("H=19: keyboardRegions len=%d, want 1 (only fileList)", len(fm.keyboardRegions))
 	}
 	if fm.historyY != 0 {
-		t.Errorf("H=14: historyY=%d, want 0", fm.historyY)
+		t.Errorf("H=19: historyY=%d, want 0", fm.historyY)
 	}
 }
 
-func TestSession_Height15_NoHistoryWithEmptyDirs(t *testing.T) {
-	fm := openTestSession(t, 60, 15, nil) // 不写入 history.json
+func TestSession_Height20_NoHistoryWithEmptyDirs(t *testing.T) {
+	fm := openTestSession(t, 60, 20, nil) // 不写入 history.json
 	if fm.history != nil {
 		t.Errorf("H=15 empty dirs: history should not be constructed")
 	}
@@ -270,32 +270,32 @@ func TestSession_Height15_NoHistoryWithEmptyDirs(t *testing.T) {
 	}
 }
 
-func TestSession_Height15_WithDirs_GeometryExact(t *testing.T) {
+func TestSession_Height20_WithDirs_GeometryExact(t *testing.T) {
 	// W=60，fileselectwidth=0.4，pickerW = max(20, 24) = 24
-	// fm.rect = (0, 0, 60, 14)；previewX = 23；fullListRect = (0, 1, 23, 12)
-	// historyBlockH = 4，listRect.H = 8，historyRect = (0, 10, 23, 3)，historyY = 9
-	fm := openTestSession(t, 60, 15, []string{"/path/a", "/path/b", "/path/c", "/path/d"})
+	// fm.rect = (0, 0, 60, 19)；previewX = 23；fullListRect = (0, 1, 23, 17)
+	// historyBlockH = 6，listRect.H = 11，historyRect = (0, 13, 23, 5)，historyY = 12
+	fm := openTestSession(t, 60, 20, []string{"/path/a", "/path/b", "/path/c", "/path/d"})
 	if fm.history == nil {
-		t.Fatalf("H=15 with dirs: history should be constructed")
+		t.Fatalf("H=20 with dirs: history should be constructed")
 	}
-	if fm.historyY != 9 { // = historyRect.Y - 1 = 10 - 1 = 9
-		t.Errorf("historyY: got %d, want 9", fm.historyY)
+	if fm.historyY != 12 { // = historyRect.Y - 1 = 13 - 1 = 12
+		t.Errorf("historyY: got %d, want 12", fm.historyY)
 	}
-	if got, want := fm.list.rect.H, 8; got != want {
+	if got, want := fm.list.rect.H, 11; got != want {
 		t.Errorf("fileList.rect.H: got %d, want %d", got, want)
 	}
-	if got, want := fm.list.listH, 6; got != want {
+	if got, want := fm.list.listH, 9; got != want {
 		t.Errorf("fileList.listH: got %d, want %d", got, want)
 	}
-	if got, want := fm.history.rect, (Rect{X: 0, Y: 10, W: 23, H: 3}); got != want {
+	if got, want := fm.history.rect, (Rect{X: 0, Y: 13, W: 23, H: 5}); got != want {
 		t.Errorf("history.rect: got %v, want %v", got, want)
 	}
 }
 
 // ---- slice 顺序 ----
 
-func TestSession_Height15_SliceOrder(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+func TestSession_Height20_SliceOrder(t *testing.T) {
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 	if got, want := len(fm.regions), 3; got != want {
 		t.Errorf("regions len: got %d, want %d (fileList+history+preview)", got, want)
 	}
@@ -319,20 +319,20 @@ func TestSession_Height15_SliceOrder(t *testing.T) {
 	}
 }
 
-func TestSession_Height14_SliceOrderNoHistory(t *testing.T) {
-	fm := openTestSession(t, 60, 14, []string{"/a"})
+func TestSession_Height19_SliceOrderNoHistory(t *testing.T) {
+	fm := openTestSession(t, 60, 19, []string{"/a"})
 	if got, want := len(fm.regions), 2; got != want {
-		t.Errorf("H=14: regions len=%d, want %d", got, want)
+		t.Errorf("H=19: regions len=%d, want %d", got, want)
 	}
 	if got, want := len(fm.keyboardRegions), 1; got != want {
-		t.Errorf("H=14: keyboardRegions len=%d, want %d", got, want)
+		t.Errorf("H=19: keyboardRegions len=%d, want %d", got, want)
 	}
 }
 
 // ---- 初始 focus ----
 
 func TestSession_InitialFocusOnFileList(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 	if fm.focus != 0 {
 		t.Errorf("focus: got %d, want 0 (fileList)", fm.focus)
 	}
@@ -347,7 +347,7 @@ func TestSession_InitialFocusOnFileList(t *testing.T) {
 // ---- Tab 轮转 ----
 
 func TestSession_TabCyclesBetweenFileListAndHistory(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 
 	fm.HandleEvent(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone, ""))
 	if fm.focus != 1 {
@@ -380,9 +380,9 @@ func TestSession_TabNoHistoryNoOp(t *testing.T) {
 // ---- FFM：鼠标 move / click ----
 
 func TestSession_MouseClickInHistorySwitchesFocus(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/path/a", "/path/b"})
-	// 点 history 内容区 (col 5, row 11) — 应命中 keyboardRegions[1] (history)
-	ev := tcell.NewEventMouse(5, 11, tcell.Button1, 0, "")
+	fm := openTestSession(t, 60, 20, []string{"/path/a", "/path/b"})
+	// 点 history 内容区 (col 5, row 14) — 应命中 keyboardRegions[1] (history)
+	ev := tcell.NewEventMouse(5, 14, tcell.Button1, 0, "")
 	fm.HandleEvent(ev)
 	if fm.focus != 1 {
 		t.Errorf("after click in history: focus=%d, want 1", fm.focus)
@@ -403,9 +403,9 @@ func TestSession_MouseClickInPreviewDoesNotChangeFocus(t *testing.T) {
 }
 
 func TestSession_MouseMoveInHistoryDoesNotSwitchFocus(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 	// 纯 move（Buttons()==0）不应触发 FFM
-	ev := tcell.NewEventMouse(5, 11, 0, 0, "")
+	ev := tcell.NewEventMouse(5, 14, 0, 0, "")
 	fm.HandleEvent(ev)
 	if fm.focus != 0 {
 		t.Errorf("move event in history changed focus: got %d, want 0", fm.focus)
@@ -415,13 +415,12 @@ func TestSession_MouseMoveInHistoryDoesNotSwitchFocus(t *testing.T) {
 // ---- border / separator 不被 hitTest 命中 ----
 
 func TestSession_HitTest_SeparatorMisses(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
-	// history 上分隔线 行 = fm.historyY = 10
-	// 既不在 listRect (rows 0..7) 也不在 historyRect (rows 10..12) 内 — 但 preview 横跨整高度，应命中
-	// 验证：sep 列 + historyY 行（在左栏中段）
-	ev := tcell.NewEventMouse(fm.previewX, 10, tcell.Button1, 0, "")
+	fm := openTestSession(t, 60, 20, []string{"/a"})
+	// history 上分隔线行 = fm.historyY = 12：分隔线本身既不在 listRect (rows 1..11)
+	// 也不在 historyRect (rows 13..17) 内，preview 又从 previewX+1=24 起——
+	// 点击 (previewX, historyY) 不命中任何 keyboardRegion，focus 不变。
+	ev := tcell.NewEventMouse(fm.previewX, fm.historyY, tcell.Button1, 0, "")
 	fm.HandleEvent(ev)
-	// preview 在 row 10 命中了，但 focus 不变（preview 不在 keyboardRegions）
 	if fm.focus != 0 {
 		t.Errorf("click at historyY+sepX: focus=%d, want 0", fm.focus)
 	}
@@ -430,7 +429,7 @@ func TestSession_HitTest_SeparatorMisses(t *testing.T) {
 // ---- ActivateFromHistory ----
 
 func TestSession_ActivateFromHistory_SwitchesFocusToFileList(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a", "/b"})
+	fm := openTestSession(t, 60, 20, []string{"/a", "/b"})
 	// 真实可切换的目标
 	target := t.TempDir()
 	if fm.history == nil {
@@ -470,7 +469,7 @@ func TestSession_ActivateFromHistory_SwitchesFocusToFileList(t *testing.T) {
 // ---- close 失焦 ----
 
 func TestSession_CloseLosesFocus(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 	fm.switchFocus(1)
 	if !fm.history.focused {
 		t.Fatalf("precondition: history not focused after switchFocus(1)")
@@ -486,11 +485,11 @@ func TestSession_CloseLosesFocus(t *testing.T) {
 // ---- 像素验证：history 横线 + label + 交点 ----
 
 func TestSession_Border_HasHistoryLabel(t *testing.T) {
-	fm := openTestSession(t, 60, 15, []string{"/a"})
+	fm := openTestSession(t, 60, 20, []string{"/a"})
 	// 强制渲染一帧
 	fm.Display()
 
-	// historyY = 9 行；label 区从 col 0 起：─ ─ [space] R e c e n t [space] P a t h s [space] ─ ─ ...
+	// historyY = 12 行；label 区从 col 0 起：─ ─ [space] R e c e n t [space] P a t h s [space] ─ ─ ...
 	// 实际写入位置（label 是 " Recent Paths "）：
 	//   col 0: ─
 	//   col 1: ─
@@ -523,12 +522,11 @@ func TestSession_Border_HasHistoryLabel(t *testing.T) {
 }
 
 func TestSession_Border_NoHistory_NoSeparatorLabel(t *testing.T) {
-	fm := openTestSession(t, 60, 14, nil)
+	fm := openTestSession(t, 60, 19, nil)
 	fm.Display()
-	// height=14 不构造 history，row 10 没有分隔线（保留 │ 或 空格）
-	// 但 │ 默认贯穿，验证 previewX 行不是 ┤
-	got, _, _, _ := screen.Screen.GetContent(fm.previewX, 10)
+	// H=19 < historyMinHeight=20 不构造 history，任何行都不画分隔线 label
+	got, _, _, _ := screen.Screen.GetContent(fm.previewX, 12)
 	if got == '┤' {
-		t.Errorf("H<15 with no history: ┤ should not appear at row 10")
+		t.Errorf("H<20 with no history: ┤ should not appear at row 12")
 	}
 }

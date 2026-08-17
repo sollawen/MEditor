@@ -639,16 +639,17 @@ func (l *fileList) fetchGit(dir string) {
 	l.isRepo = isRepo
 	l.gitBranch = branch
 	for i := range l.allEntries {
+		// chars 优先于 dir 级标志：untracked 目录内仍可能有个别 ignored 条目
+		// （--ignored=traditional 会逐个列出 ?? 目录里的 !! 文件），须显示 I 而非 U。
+		if ch, ok := chars[l.allEntries[i].name]; ok {
+			l.allEntries[i].gitChar = ch
+			continue
+		}
 		switch state {
 		case dirAllIgnored:
 			l.allEntries[i].gitChar = 'I'
-			continue
 		case dirAllUntracked:
 			l.allEntries[i].gitChar = 'U'
-			continue
-		}
-		if ch, ok := chars[l.allEntries[i].name]; ok {
-			l.allEntries[i].gitChar = ch
 		}
 	}
 	l.mu.Unlock()

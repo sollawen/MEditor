@@ -264,6 +264,18 @@ func TestParsePorcelain(t *testing.T) {
 			branch: "",
 			state:  dirNormal,
 		},
+		// —— 混合形态：?? 折叠目录 + 内部 !! 逐文件 ——
+		// --ignored=traditional 下，git 对整体 untracked 的目录折叠报 "?? dir/"，
+		// 但目录内被 ignore 的文件仍逐个列出。chars 保留这些 'I' 项，
+		// fetchGit 据此给个别文件打 I、其余兜底 U。
+		{
+			name:   "untracked dir containing ignored files (mixed ?? + !!)",
+			input:  []byte("?? gamePack/texas/audio/\x00!! gamePack/texas/audio/__pycache__/\x00!! gamePack/texas/audio/test_stt.py\x00"),
+			prefix: "gamePack/texas/audio/",
+			want:   map[string]rune{"__pycache__": 'I', "test_stt.py": 'I'},
+			branch: "",
+			state:  dirAllUntracked,
+		},
 		// —— ignored（!!）「深处」bug 修复 ——
 		// ignored 的折叠路径是「ignored 树根」，不是 cwd 自己。
 		// cwd 进实体深处时，git 仍报 "!! <树根>/"，prefix 是 path 的祖先，
